@@ -988,7 +988,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   // work at all; the rest of the form (filling in data, downloading the
   // Excel file, opening a mail client) keeps working from a local file
   // regardless.
-  var GOOGLE_CLIENT_ID = '164638106875-dj2gqt2b7k901d6rda66p2e6ekr5752q.apps.googleusercontent.com';
+  var GOOGLE_CLIENT_ID = '';
   var DRIVE_FOLDER_NAME = '修理依頼書';
   var DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 
@@ -1228,6 +1228,17 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         ws.pageSetup.fitToPage = false;
         ws.pageSetup.scale = 117;
 
+        // The template defines no explicit print area, and (see
+        // fixMergedBoxBorders below) its <cols> block carries a trailing
+        // "columns 10 through 16384 are 9 characters wide" record left over
+        // from Excel's own save. Excel itself ignores both of these and
+        // just prints the B1:I43 content, but Google Sheets' "fit to width"
+        // scaling appears to size itself against that much wider phantom
+        // sheet extent instead, which is why printing from Sheets left a
+        // large blank strip on the right even at "fit to width". Pinning an
+        // explicit print area removes that ambiguity for both.
+        ws.pageSetup.printArea = 'B1:I43';
+
         // NOTE: we intentionally do NOT use wb.addImage/ws.addImage here.
         // ExcelJS's load->save round trip does not preserve the template's
         // original drawing objects (the "修理依頼書" title text box and the
@@ -1266,6 +1277,15 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       ]).then(function(results){
         var stylesXml = results[0];
         var sheetXml = results[1];
+
+        // Drop the template's leftover "columns 10-16384 are 9 characters
+        // wide" record. It's inert in Excel (which prints only the B1:I43
+        // dimension), but appears to make Google Sheets' print "fit to
+        // width" scale against that much wider phantom extent instead of
+        // the visible form, leaving a large blank strip on the right when
+        // printed from a saved Google Sheet. See also the explicit
+        // pageSetup.printArea set alongside pageSetup.scale above.
+        sheetXml = sheetXml.replace(/<col min="10" max="16384"[^/]*\/>/, '');
 
         var bordersMatch = stylesXml.match(/<borders count="(\d+)">([\s\S]*?)<\/borders>/);
         var bCount = +bordersMatch[1];
