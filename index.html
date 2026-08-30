@@ -988,7 +988,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   // work at all; the rest of the form (filling in data, downloading the
   // Excel file, opening a mail client) keeps working from a local file
   // regardless.
-  var GOOGLE_CLIENT_ID = '164638106875-dj2gqt2b7k901d6rda66p2e6ekr5752q.apps.googleusercontent.com';
+  var GOOGLE_CLIENT_ID = '';
   var DRIVE_FOLDER_NAME = '修理依頼書';
   var DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 
@@ -1278,14 +1278,16 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         var stylesXml = results[0];
         var sheetXml = results[1];
 
-        // Drop the template's leftover "columns 10-16384 are 9 characters
-        // wide" record. It's inert in Excel (which prints only the B1:I43
-        // dimension), but appears to make Google Sheets' print "fit to
-        // width" scale against that much wider phantom extent instead of
-        // the visible form, leaving a large blank strip on the right when
-        // printed from a saved Google Sheet. See also the explicit
-        // pageSetup.printArea set alongside pageSetup.scale above.
-        sheetXml = sheetXml.replace(/<col min="10" max="16384"[^/]*\/>/, '');
+        // The template's leftover "columns 10-16384 are 9 characters wide"
+        // record is inert in Excel (which prints only the B1:I43 print
+        // area), but simply deleting it just falls back to the *default*
+        // column width for those columns instead of removing them — nearly
+        // the same width as before, so Google Sheets' "fit to width" print
+        // still scales against a much wider phantom sheet than the visible
+        // form. Replacing it with an explicit near-zero, hidden width
+        // instead makes every column past I collapse to ~0 regardless of
+        // how many trailing columns the importing app pads the sheet with.
+        sheetXml = sheetXml.replace(/<col min="10" max="16384"[^/]*\/>/, '<col min="10" max="16384" width="1" style="1" customWidth="1" hidden="1"/>');
 
         var bordersMatch = stylesXml.match(/<borders count="(\d+)">([\s\S]*?)<\/borders>/);
         var bCount = +bordersMatch[1];
