@@ -988,7 +988,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   // work at all; the rest of the form (filling in data, downloading the
   // Excel file, opening a mail client) keeps working from a local file
   // regardless.
-  var GOOGLE_CLIENT_ID = '164638106875-dj2gqt2b7k901d6rda66p2e6ekr5752q.apps.googleusercontent.com';
+  var GOOGLE_CLIENT_ID = '';
   var DRIVE_FOLDER_NAME = '修理依頼書';
   var DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 
@@ -1210,22 +1210,21 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         // way there would be if this were also the 'excel' output.
         if(forSheets){
           var SHEETS_WIDTH_FACTOR = 1.43;
-          // Measured directly from a real Google Sheets print-preview
-          // screenshot at 1.22x: the table's own bottom border sits ~4pt
-          // (physical, on-paper) above where the page's printable area
-          // actually ends (the boundary just before the 0.4cm bottom
-          // margin), i.e. there's still a small unfilled strip below the
-          // last row. Because Sheets' "fit to width" zoom shrinks the
-          // stored row heights by roughly 1/SHEETS_WIDTH_FACTOR before
-          // printing, closing a 4pt physical gap takes ~4 * 1.43 ≈ 5.7pt
-          // of extra *stored* row height, not 4pt — so the factor only
-          // needed to move a little (1.22 -> 1.227) to close nearly all of
-          // it. 1.227x keeps 43 rows' stored total at ~871pt, still
-          // comfortably under the ~873pt one-page ceiling measured earlier
-          // (37 rows at 1.43x filled the page at 873.015pt; 38 rows at
-          // 896.61pt spilled to a 2nd page), so this should not reopen the
-          // earlier 2-page overflow.
-          var SHEETS_HEIGHT_FACTOR = 1.227;
+          // The one-page ceiling for 43 rows' stored height (at this
+          // column config) was empirically bounded earlier to somewhere
+          // between 873.015pt (37 rows at 1.43x: filled the page, no
+          // overflow) and 896.61pt (38 rows at 1.43x: spilled to a 2nd
+          // page). A cautious first pass moved the factor only from
+          // 1.22 to 1.227 (stored total ~871pt) to close a small measured
+          // gap, but the user reports there's still clearly visible blank
+          // space below the table — meaning the true safe ceiling sits
+          // well above 871pt, closer to the 896.61pt confirmed-overflow
+          // point than to the 873pt confirmed-safe point. Pushing to 1.25
+          // (stored total 886.875pt) uses most of that headroom while
+          // still keeping a ~9.7pt (~1.1%) buffer below the confirmed
+          // overflow point, so it should shrink the visible gap a lot
+          // further without reopening the earlier 2-page overflow bug.
+          var SHEETS_HEIGHT_FACTOR = 1.25;
           var DEFAULT_ROW_HEIGHT = ws.properties.defaultRowHeight || 16.5;
           ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'].forEach(function(col){
             var current = ws.getColumn(col).width;
