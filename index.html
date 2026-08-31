@@ -988,7 +988,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   // work at all; the rest of the form (filling in data, downloading the
   // Excel file, opening a mail client) keeps working from a local file
   // regardless.
-  var GOOGLE_CLIENT_ID = '164638106875-dj2gqt2b7k901d6rda66p2e6ekr5752q.apps.googleusercontent.com';
+  var GOOGLE_CLIENT_ID = '';
   var DRIVE_FOLDER_NAME = '修理依頼書';
   var DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 
@@ -1155,6 +1155,27 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       return wb.xlsx.load(tplBuffer).then(function(){
         var ws = wb.worksheets[0];
 
+        // Measured directly from a real "fit to width" Google Sheets print
+        // preview: with the template's original column widths (in Excel's
+        // "characters" unit) and no extra scale, the printed form only
+        // reached ~13.3cm of a 19cm-wide printable A4 area — about 70% —
+        // leaving the rest blank on the right regardless of the print
+        // dialog's scale setting. That's because "characters" are a
+        // font-relative unit, and Google Sheets converts them to a physical
+        // size using its own font metrics, not Excel's — so the same
+        // stored width simply renders narrower in Sheets than in Excel.
+        // Baking in the correction (~1.43x, from 13.3cm needing to reach
+        // 19cm) at the column-width level, instead of relying on a percent
+        // print scale, means both Excel and Sheets start from the same
+        // physical intent. Excel's own scale is reduced from 117 to 82
+        // (117/1.43) in step so its print output — already verified to
+        // fill an A4 page correctly — comes out the same as before.
+        var SHEETS_WIDTH_FACTOR = 1.43;
+        ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'].forEach(function(col){
+          var current = ws.getColumn(col).width;
+          if(current) ws.getColumn(col).width = current * SHEETS_WIDTH_FACTOR;
+        });
+
         ws.getCell('C3').value = reqDateTime;
         ws.getCell('C4').value = equipment;
         safeMerge(ws, 'C4:D5');
@@ -1226,7 +1247,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         // a single A4 page with a safety margin below the point where it
         // would spill a sliver onto a second page.
         ws.pageSetup.fitToPage = false;
-        ws.pageSetup.scale = 117;
+        ws.pageSetup.scale = Math.round(117 / SHEETS_WIDTH_FACTOR);
 
         // The template defines no explicit print area, and (see
         // fixMergedBoxBorders below) its <cols> block carries a trailing
@@ -1406,7 +1427,11 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   // toCol, toColOff, toRow].
   function sketchLayout(n){
     var L = 1, LOff = 0, R = 9, ROff = 0, T = 21, B = 34, MR = 28;
-    var MC = 4, MCOff = 72500; // column E, ~15.5% in — bisects B:I's rendered width
+    // Column E's own width was scaled by SHEETS_WIDTH_FACTOR (1.43x) along with
+    // the rest of B:I, so the EMU offset within column E that bisects the box
+    // must be scaled by the same factor to keep landing at the true midpoint
+    // (72500 * 1.43 ≈ 103675).
+    var MC = 4, MCOff = 103675; // column E, ~15.5% in — bisects B:I's rendered width
     if(n <= 1) return [[L, LOff, T, R, ROff, B]];
     if(n === 2) return [[L, LOff, T, MC, MCOff, B], [MC, MCOff, T, R, ROff, B]];
     var quadrants = [
@@ -1498,7 +1523,6 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     });
   }
 })();
-
 </script>
 </body>
 </html>
