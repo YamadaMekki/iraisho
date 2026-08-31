@@ -988,7 +988,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   // work at all; the rest of the form (filling in data, downloading the
   // Excel file, opening a mail client) keeps working from a local file
   // regardless.
-  var GOOGLE_CLIENT_ID = '164638106875-dj2gqt2b7k901d6rda66p2e6ekr5752q.apps.googleusercontent.com';
+  var GOOGLE_CLIENT_ID = '';
   var DRIVE_FOLDER_NAME = '修理依頼書';
   var DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 
@@ -1210,7 +1210,22 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         // way there would be if this were also the 'excel' output.
         if(forSheets){
           var SHEETS_WIDTH_FACTOR = 1.43;
-          var SHEETS_HEIGHT_FACTOR = 1.22;
+          // Measured directly from a real Google Sheets print-preview
+          // screenshot at 1.22x: the table's own bottom border sits ~4pt
+          // (physical, on-paper) above where the page's printable area
+          // actually ends (the boundary just before the 0.4cm bottom
+          // margin), i.e. there's still a small unfilled strip below the
+          // last row. Because Sheets' "fit to width" zoom shrinks the
+          // stored row heights by roughly 1/SHEETS_WIDTH_FACTOR before
+          // printing, closing a 4pt physical gap takes ~4 * 1.43 ≈ 5.7pt
+          // of extra *stored* row height, not 4pt — so the factor only
+          // needed to move a little (1.22 -> 1.227) to close nearly all of
+          // it. 1.227x keeps 43 rows' stored total at ~871pt, still
+          // comfortably under the ~873pt one-page ceiling measured earlier
+          // (37 rows at 1.43x filled the page at 873.015pt; 38 rows at
+          // 896.61pt spilled to a 2nd page), so this should not reopen the
+          // earlier 2-page overflow.
+          var SHEETS_HEIGHT_FACTOR = 1.227;
           var DEFAULT_ROW_HEIGHT = ws.properties.defaultRowHeight || 16.5;
           ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'].forEach(function(col){
             var current = ws.getColumn(col).width;
@@ -1294,31 +1309,38 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         // printer driver's own margins.
         //
         // Excel's own "fit to 1 page wide x 1 page tall" auto-scaling
-        // (fitToPage) sidesteps that entirely: instead of us guessing a
-        // percentage, Excel computes whatever scale keeps the sheet on
-        // exactly one page for the printer actually selected at print
-        // time, so it can never spill a sliver onto a second page on any
-        // printer. This was avoided earlier in this project on unrelated,
-        // less-well-proportioned content, where it visibly over-shrank one
-        // axis — but with the current column/row proportions already
-        // close to A4's own aspect ratio, testing it here lands within a
-        // hair of the old fixed-scale fill, so that tradeoff no longer
-        // applies. The 'excel' target uses fitToPage for exactly this
-        // robustness. The 'sheets' target keeps an explicit scale — Google
-        // Sheets' own print pipeline ignores this file's pageSetup
-        // entirely, so fitToPage's real benefit (matching a specific
-        // printer's own margins) wouldn't apply there anyway; the value is
-        // only kept so the file still looks reasonable if someone opens it
-        // directly in Excel instead of via the Sheets conversion Drive
-        // performs.
-        var EXCEL_SCALE = 114;
+        // (fitToPage) was tried here to sidestep the real-printer overflow
+        // below: instead of us guessing a percentage, Excel computes
+        // whatever scale keeps the sheet on exactly one page for the
+        // printer actually selected at print time. It did stop the 2-page
+        // overflow, but it also visibly over-shrank the page on the user's
+        // real RICOH printer (bigger margins than the original edge-to-edge
+        // fill) — fitToPage picks the more restrictive of its width-fit and
+        // height-fit scales, and that turned out to leave real slack on
+        // this content, unlike in LibreOffice's rendering.
+        //
+        // The real root cause of the original overflow is now believed to
+        // be the trailing "columns 10-16384" record that fixMergedBoxBorders
+        // used to rewrite to a hidden 1-wide column for BOTH targets (see
+        // that function): real Excel's page-fitting math appears more
+        // sensitive than LibreOffice to declared column metadata just past
+        // the print area's right edge, even when hidden, and could size its
+        // fit against a slightly wider-than-intended sheet extent. That
+        // patch is now scoped to the 'sheets' target only, so the 'excel'
+        // target's trailing-column record is back to the template's
+        // original, untouched state. With that suspected cause removed,
+        // the 'excel' target goes back to a fixed scale (no fitToPage),
+        // matching the geometry that printed a full edge-to-edge single
+        // page before any of this — this still can't be verified against
+        // the user's real printer from this sandbox, so it needs to be
+        // re-confirmed there.
+        var EXCEL_SCALE = 117;
         if(forSheets){
           ws.pageSetup.fitToPage = false;
           ws.pageSetup.scale = Math.round(EXCEL_SCALE / SHEETS_WIDTH_FACTOR);
         } else {
-          ws.pageSetup.fitToPage = true;
-          ws.pageSetup.fitToWidth = 1;
-          ws.pageSetup.fitToHeight = 1;
+          ws.pageSetup.fitToPage = false;
+          ws.pageSetup.scale = EXCEL_SCALE;
         }
 
         // The template defines no explicit print area, and (see
