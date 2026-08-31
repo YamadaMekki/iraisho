@@ -988,7 +988,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   // work at all; the rest of the form (filling in data, downloading the
   // Excel file, opening a mail client) keeps working from a local file
   // regardless.
-  var GOOGLE_CLIENT_ID = '164638106875-dj2gqt2b7k901d6rda66p2e6ekr5752q.apps.googleusercontent.com';
+  var GOOGLE_CLIENT_ID = '';
   var DRIVE_FOLDER_NAME = '修理依頼書';
   var DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 
@@ -1343,7 +1343,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         // (see the comment on BOX_BORDER_MAP above), since ExcelJS's merge
         // also drops those. Both fixes operate on the raw saved .xlsx.
         return wb.xlsx.writeBuffer().then(function(rawBuffer){
-          return fixMergedBoxBorders(rawBuffer);
+          return fixMergedBoxBorders(rawBuffer, forSheets);
         }).then(function(borderFixedBuffer){
           var readyImages = currentImages.filter(function(img){ return !!img.buffer; });
           return patchDrawingBack(borderFixedBuffer, b64ToArrayBuffer(TEMPLATE_B64), readyImages, forSheets);
@@ -1362,7 +1362,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   // should look like. New <border>/<xf> entries are appended to the
   // workbook's own style tables (never reusing indices from a different
   // file), so this only touches the cells listed in BOX_BORDER_MAP.
-  function fixMergedBoxBorders(rawBuffer){
+  function fixMergedBoxBorders(rawBuffer, forSheets){
     return JSZip.loadAsync(rawBuffer).then(function(outZip){
       return Promise.all([
         outZip.file('xl/styles.xml').async('string'),
@@ -1372,15 +1372,29 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         var sheetXml = results[1];
 
         // The template's leftover "columns 10-16384 are 9 characters wide"
-        // record is inert in Excel (which prints only the B1:I43 print
-        // area), but simply deleting it just falls back to the *default*
-        // column width for those columns instead of removing them — nearly
-        // the same width as before, so Google Sheets' "fit to width" print
-        // still scales against a much wider phantom sheet than the visible
-        // form. Replacing it with an explicit near-zero, hidden width
-        // instead makes every column past I collapse to ~0 regardless of
-        // how many trailing columns the importing app pads the sheet with.
-        sheetXml = sheetXml.replace(/<col min="10" max="16384"[^/]*\/>/, '<col min="10" max="16384" width="1" style="1" customWidth="1" hidden="1"/>');
+        // record was assumed inert in Excel (which prints only the B1:I43
+        // print area under a plain percentage scale), but simply deleting
+        // it just falls back to the *default* column width for those
+        // columns instead of removing them — nearly the same width as
+        // before, so Google Sheets' "fit to width" print still scales
+        // against a much wider phantom sheet than the visible form.
+        // Replacing it with an explicit near-zero, hidden width instead
+        // makes every column past I collapse to ~0 regardless of how many
+        // trailing columns the importing app pads the sheet with.
+        //
+        // This only ever needed to happen for the 'sheets' target. Real
+        // Excel's "fit sheet to 1 page" auto-scale, unlike a plain
+        // percentage, turned out to visibly over-shrink the page once this
+        // patch was applied to the 'excel' target too — consistent with
+        // Excel's own fit-to-page engine, unlike a flat percentage print,
+        // being sensitive to declared column metadata just past the print
+        // area's edge, even hidden metadata. The 'excel' target now leaves
+        // the template's original (unmodified) trailing-column record
+        // alone, matching the geometry this pipeline used back when its
+        // Excel output was last confirmed pixel-correct.
+        if(forSheets){
+          sheetXml = sheetXml.replace(/<col min="10" max="16384"[^/]*\/>/, '<col min="10" max="16384" width="1" style="1" customWidth="1" hidden="1"/>');
+        }
 
         var bordersMatch = stylesXml.match(/<borders count="(\d+)">([\s\S]*?)<\/borders>/);
         var bCount = +bordersMatch[1];
