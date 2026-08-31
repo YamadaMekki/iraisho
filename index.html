@@ -988,7 +988,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   // work at all; the rest of the form (filling in data, downloading the
   // Excel file, opening a mail client) keeps working from a local file
   // regardless.
-  var GOOGLE_CLIENT_ID = '164638106875-dj2gqt2b7k901d6rda66p2e6ekr5752q.apps.googleusercontent.com';
+  var GOOGLE_CLIENT_ID = '';
   var DRIVE_FOLDER_NAME = '修理依頼書';
   var DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 
@@ -1170,11 +1170,29 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         // physical intent. Excel's own scale is reduced from 117 to 82
         // (117/1.43) in step so its print output — already verified to
         // fill an A4 page correctly — comes out the same as before.
+        //
+        // Row heights need the same treatment. Excel's `scale` is a flat
+        // zoom applied equally to width AND height, so dividing it by 1.43
+        // to cancel out the widened columns also silently shrinks every
+        // row to ~70% of its correct printed height (82/117 ≈ 0.70) unless
+        // the row heights are grown back by that same 1.43x — which is
+        // exactly what produced the "space appeared at the bottom" result
+        // in both Excel and Google Sheets. Row heights are stored in points
+        // (an absolute physical unit, not font-relative like column
+        // "characters"), so — unlike columns — there's no cross-app unit
+        // mismatch to correct for; they only need to be scaled by the same
+        // factor as the columns so that dividing Excel's scale by 1.43
+        // still cancels out cleanly on both axes at once.
         var SHEETS_WIDTH_FACTOR = 1.43;
         ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'].forEach(function(col){
           var current = ws.getColumn(col).width;
           if(current) ws.getColumn(col).width = current * SHEETS_WIDTH_FACTOR;
         });
+        for(var rowNum = 1; rowNum <= 43; rowNum++){
+          var rowObj = ws.getRow(rowNum);
+          var currentHeight = rowObj.height;
+          if(currentHeight) rowObj.height = currentHeight * SHEETS_WIDTH_FACTOR;
+        }
 
         ws.getCell('C3').value = reqDateTime;
         ws.getCell('C4').value = equipment;
