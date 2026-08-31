@@ -923,7 +923,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     busyBtn.disabled = true;
     setStatus('Excel ファイルを作成しています…');
 
-    return buildWorkbook().then(function(buffer){
+    return buildWorkbook('excel').then(function(buffer){
       var dateTag = fields.reqDateVal.replace(/-/g, '');
       var filename = sanitizeFilename('修理依頼書_' + fields.equipment + '_' + dateTag) + '.xlsx';
       var blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
@@ -988,7 +988,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   // work at all; the rest of the form (filling in data, downloading the
   // Excel file, opening a mail client) keeps working from a local file
   // regardless.
-  var GOOGLE_CLIENT_ID = '164638106875-dj2gqt2b7k901d6rda66p2e6ekr5752q.apps.googleusercontent.com';
+  var GOOGLE_CLIENT_ID = '';
   var DRIVE_FOLDER_NAME = '修理依頼書';
   var DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 
@@ -1103,7 +1103,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     var dateTag = fields.reqDateVal.replace(/-/g, '');
     var filename = sanitizeFilename('修理依頼書_' + fields.equipment + '_' + dateTag);
 
-    buildWorkbook().then(function(buffer){
+    buildWorkbook('sheets').then(function(buffer){
       var blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
       return findOrCreateDriveFolder(googleAccessToken, DRIVE_FOLDER_NAME).then(function(folderId){
         return uploadAsGoogleSheet(googleAccessToken, filename, folderId, blob);
@@ -1120,7 +1120,18 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     });
   });
 
-  function buildWorkbook(){
+  // target: 'excel' for the direct-download / mail-attachment button (the
+  // file opens straight in real Excel, so it gets the original, already-
+  // correct geometry at its native 117% scale), or 'sheets' for the
+  // "Googleスプレッドシートに保存" button (gets the column/row corrections
+  // Google Sheets' own print pipeline needs — see the SHEETS_WIDTH_FACTOR /
+  // SHEETS_HEIGHT_FACTOR comment below). Excel and Google Sheets don't
+  // agree on how a stored column width (a font-relative "characters" unit)
+  // translates to a physical size, so the same file can't be simultaneously
+  // pixel-perfect in both when printed — splitting the two outputs instead
+  // of sharing one lets each destination get its own, fully correct
+  // geometry rather than a compromise.
+  function buildWorkbook(target){
     var equipment = document.getElementById('equipment').value.trim();
     var equipPart = document.getElementById('part').value.trim();
     var requester = document.getElementById('requester').value.trim();
@@ -1150,48 +1161,62 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       : run(ExcelJS);
 
     function run(EJS){
+      var forSheets = target === 'sheets';
       var wb = new EJS.Workbook();
       var tplBuffer = b64ToArrayBuffer(TEMPLATE_B64);
       return wb.xlsx.load(tplBuffer).then(function(){
         var ws = wb.worksheets[0];
 
-        // Measured directly from a real "fit to width" Google Sheets print
-        // preview: with the template's original column widths (in Excel's
-        // "characters" unit) and no extra scale, the printed form only
-        // reached ~13.3cm of a 19cm-wide printable A4 area — about 70% —
-        // leaving the rest blank on the right regardless of the print
-        // dialog's scale setting. That's because "characters" are a
-        // font-relative unit, and Google Sheets converts them to a physical
-        // size using its own font metrics, not Excel's — so the same
-        // stored width simply renders narrower in Sheets than in Excel.
-        // Baking in the correction (~1.43x, from 13.3cm needing to reach
-        // 19cm) at the column-width level, instead of relying on a percent
-        // print scale, means both Excel and Sheets start from the same
-        // physical intent. Excel's own scale is reduced from 117 to 82
-        // (117/1.43) in step so its print output — already verified to
-        // fill an A4 page correctly — comes out the same as before.
+        // Excel and Google Sheets do not agree on how a stored column width
+        // (a font-relative "characters" unit) maps to a physical size, so
+        // the same geometry can't print pixel-perfect in both. Rather than
+        // splitting the difference in one shared file, buildWorkbook(target)
+        // now produces two different, independently-correct outputs: the
+        // 'excel' target keeps the template's original column widths, row
+        // heights, and its native 117% scale untouched (this is exactly
+        // what already prints correctly in real Excel/LibreOffice); only
+        // the 'sheets' target — used solely for the "Googleスプレッドシート
+        // に保存" button — gets the corrections below, baked in as a
+        // pre-processing step that only that path ever sees.
         //
-        // Row heights need the same treatment. Excel's `scale` is a flat
-        // zoom applied equally to width AND height, so dividing it by 1.43
-        // to cancel out the widened columns also silently shrinks every
-        // row to ~70% of its correct printed height (82/117 ≈ 0.70) unless
-        // the row heights are grown back by that same 1.43x — which is
-        // exactly what produced the "space appeared at the bottom" result
-        // in both Excel and Google Sheets. Row heights are stored in points
-        // (an absolute physical unit, not font-relative like column
-        // "characters"), so — unlike columns — there's no cross-app unit
-        // mismatch to correct for; they only need to be scaled by the same
-        // factor as the columns so that dividing Excel's scale by 1.43
-        // still cancels out cleanly on both axes at once.
-        var SHEETS_WIDTH_FACTOR = 1.43;
-        ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'].forEach(function(col){
-          var current = ws.getColumn(col).width;
-          if(current) ws.getColumn(col).width = current * SHEETS_WIDTH_FACTOR;
-        });
-        for(var rowNum = 1; rowNum <= 43; rowNum++){
-          var rowObj = ws.getRow(rowNum);
-          var currentHeight = rowObj.height;
-          if(currentHeight) rowObj.height = currentHeight * SHEETS_WIDTH_FACTOR;
+        // Measured directly from a real "fit to width" Google Sheets print
+        // preview: with the template's original column widths and no extra
+        // scale, the printed form only reached ~13.3cm of a 19cm-wide
+        // printable A4 area — about 70% — leaving the rest blank on the
+        // right regardless of the print dialog's scale setting. That's
+        // because "characters" are a font-relative unit, and Google Sheets
+        // converts them to a physical size using its own font metrics, not
+        // Excel's — so the same stored width simply renders narrower in
+        // Sheets. Baking in the correction (~1.43x, from 13.3cm needing to
+        // reach 19cm) at the column-width level fixes that.
+        //
+        // Row heights need a separate, smaller correction. They're stored
+        // in points (an absolute unit, no font-metric ambiguity), but
+        // Google Sheets' "fit to width" mode computes one zoom purely from
+        // matching column width to the page and then applies that same
+        // zoom to the rows too. Since that zoom is now inflated to
+        // compensate the widened columns, matching the row growth 1:1 to
+        // the column factor (1.43x) overshot and spilled onto a second
+        // page — measured from that actual overflow, rows 1-37 alone
+        // (873pt at 1.43x) already filled page 1. 1.20x is tuned from that
+        // same measurement (709.5pt unscaled; ~1.26x was the overflow
+        // ceiling) to land just under one page. Because this pipeline only
+        // ever feeds Google's own "fit to width" print, and never opens in
+        // real Excel, there's no shared-scale constraint to reconcile here
+        // the way there would be if this were also the 'excel' output.
+        if(forSheets){
+          var SHEETS_WIDTH_FACTOR = 1.43;
+          var SHEETS_HEIGHT_FACTOR = 1.20;
+          var DEFAULT_ROW_HEIGHT = ws.properties.defaultRowHeight || 16.5;
+          ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'].forEach(function(col){
+            var current = ws.getColumn(col).width;
+            if(current) ws.getColumn(col).width = current * SHEETS_WIDTH_FACTOR;
+          });
+          for(var rowNum = 1; rowNum <= 43; rowNum++){
+            var rowObj = ws.getRow(rowNum);
+            var currentHeight = rowObj.height || DEFAULT_ROW_HEIGHT;
+            rowObj.height = currentHeight * SHEETS_HEIGHT_FACTOR;
+          }
         }
 
         ws.getCell('C3').value = reqDateTime;
@@ -1263,9 +1288,14 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         // exact pipeline (ExcelJS's own resaved font metrics are slightly
         // narrower than the original file's) to confirm it still lands on
         // a single A4 page with a safety margin below the point where it
-        // would spill a sliver onto a second page.
+        // would spill a sliver onto a second page. The 'excel' target keeps
+        // this untouched 117% — it never went through the column/row
+        // widening above, so 117% is still exactly right. The 'sheets'
+        // target divides it down by the same column factor, purely so the
+        // file would still look reasonable if someone opened it directly
+        // in Excel instead of via the Sheets conversion Drive performs.
         ws.pageSetup.fitToPage = false;
-        ws.pageSetup.scale = Math.round(117 / SHEETS_WIDTH_FACTOR);
+        ws.pageSetup.scale = forSheets ? Math.round(117 / SHEETS_WIDTH_FACTOR) : 117;
 
         // The template defines no explicit print area, and (see
         // fixMergedBoxBorders below) its <cols> block carries a trailing
@@ -1292,7 +1322,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
           return fixMergedBoxBorders(rawBuffer);
         }).then(function(borderFixedBuffer){
           var readyImages = currentImages.filter(function(img){ return !!img.buffer; });
-          return patchDrawingBack(borderFixedBuffer, b64ToArrayBuffer(TEMPLATE_B64), readyImages);
+          return patchDrawingBack(borderFixedBuffer, b64ToArrayBuffer(TEMPLATE_B64), readyImages, forSheets);
         });
       });
     }
@@ -1443,13 +1473,15 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   // (computed from the sheet's real column widths), so left and right
   // come out equal on screen. Rects are [fromCol, fromColOff, fromRow,
   // toCol, toColOff, toRow].
-  function sketchLayout(n){
+  function sketchLayout(n, forSheets){
     var L = 1, LOff = 0, R = 9, ROff = 0, T = 21, B = 34, MR = 28;
-    // Column E's own width was scaled by SHEETS_WIDTH_FACTOR (1.43x) along with
-    // the rest of B:I, so the EMU offset within column E that bisects the box
-    // must be scaled by the same factor to keep landing at the true midpoint
-    // (72500 * 1.43 ≈ 103675).
-    var MC = 4, MCOff = 103675; // column E, ~15.5% in — bisects B:I's rendered width
+    // Column E's own width is only scaled by SHEETS_WIDTH_FACTOR (1.43x) for
+    // the 'sheets' target (see buildWorkbook), so the EMU offset within
+    // column E that bisects the box must scale the same way to keep landing
+    // at the true midpoint (72500 * 1.43 ≈ 103675) — and stay at the
+    // template's original 72500 for the 'excel' target, whose columns are
+    // untouched.
+    var MC = 4, MCOff = forSheets ? 103675 : 72500; // column E, ~15.5% in — bisects B:I's rendered width
     if(n <= 1) return [[L, LOff, T, R, ROff, B]];
     if(n === 2) return [[L, LOff, T, MC, MCOff, B], [MC, MCOff, T, R, ROff, B]];
     var quadrants = [
@@ -1461,7 +1493,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     return quadrants.slice(0, n);
   }
 
-  function patchDrawingBack(exceljsOutBuf, templateBuf, images){
+  function patchDrawingBack(exceljsOutBuf, templateBuf, images, forSheets){
     images = images || [];
     return JSZip.loadAsync(templateBuf).then(function(templateZip){
       return JSZip.loadAsync(exceljsOutBuf).then(function(outZip){
@@ -1476,7 +1508,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
             return outZip.file('xl/worksheets/sheet1.xml').async('string').then(function(sheetXml){
 
               if(images.length){
-                var layout = sketchLayout(images.length);
+                var layout = sketchLayout(images.length, forSheets);
                 var relEntries = [];
                 var picXmlAll = '';
                 var mimesAdded = {};
