@@ -988,7 +988,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   // work at all; the rest of the form (filling in data, downloading the
   // Excel file, opening a mail client) keeps working from a local file
   // regardless.
-  var GOOGLE_CLIENT_ID = '164638106875-dj2gqt2b7k901d6rda66p2e6ekr5752q.apps.googleusercontent.com';
+  var GOOGLE_CLIENT_ID = '';
   var DRIVE_FOLDER_NAME = '修理依頼書';
   var DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 
@@ -1121,8 +1121,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   });
 
   // target: 'excel' for the direct-download / mail-attachment button (the
-  // file opens straight in real Excel, so it gets the original, already-
-  // correct geometry at its native 117% scale), or 'sheets' for the
+  // file opens straight in real Excel, so it gets the original column
+  // widths and row heights, at a tuned EXCEL_SCALE — see below), or
+  // 'sheets' for the
   // "Googleスプレッドシートに保存" button (gets the column/row corrections
   // Google Sheets' own print pipeline needs — see the SHEETS_WIDTH_FACTOR /
   // SHEETS_HEIGHT_FACTOR comment below). Excel and Google Sheets don't
@@ -1172,9 +1173,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         // the same geometry can't print pixel-perfect in both. Rather than
         // splitting the difference in one shared file, buildWorkbook(target)
         // now produces two different, independently-correct outputs: the
-        // 'excel' target keeps the template's original column widths, row
-        // heights, and its native 117% scale untouched (this is exactly
-        // what already prints correctly in real Excel/LibreOffice); only
+        // 'excel' target keeps the template's original column widths and
+        // row heights untouched, at a tuned EXCEL_SCALE (see below) — this
+        // is exactly what already prints correctly in real Excel; only
         // the 'sheets' target — used solely for the "Googleスプレッドシート
         // に保存" button — gets the corrections below, baked in as a
         // pre-processing step that only that path ever sees.
@@ -1198,15 +1199,18 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         // compensate the widened columns, matching the row growth 1:1 to
         // the column factor (1.43x) overshot and spilled onto a second
         // page — measured from that actual overflow, rows 1-37 alone
-        // (873pt at 1.43x) already filled page 1. 1.20x is tuned from that
-        // same measurement (709.5pt unscaled; ~1.26x was the overflow
-        // ceiling) to land just under one page. Because this pipeline only
-        // ever feeds Google's own "fit to width" print, and never opens in
-        // real Excel, there's no shared-scale constraint to reconcile here
-        // the way there would be if this were also the 'excel' output.
+        // (873pt at 1.43x) already filled page 1, putting the true
+        // one-page ceiling for all 43 rows' unscaled total (709.5pt)
+        // somewhere in 1.23x-1.26x. 1.20x (tested and confirmed to still
+        // print as a single page) left a bit more margin than strictly
+        // needed; 1.22x tightens that gap while keeping a real buffer
+        // below the measured ceiling. Because this pipeline only ever
+        // feeds Google's own "fit to width" print, and never opens in real
+        // Excel, there's no shared-scale constraint to reconcile here the
+        // way there would be if this were also the 'excel' output.
         if(forSheets){
           var SHEETS_WIDTH_FACTOR = 1.43;
-          var SHEETS_HEIGHT_FACTOR = 1.20;
+          var SHEETS_HEIGHT_FACTOR = 1.22;
           var DEFAULT_ROW_HEIGHT = ws.properties.defaultRowHeight || 16.5;
           ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'].forEach(function(col){
             var current = ws.getColumn(col).width;
@@ -1283,19 +1287,28 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         // reduction, leaving the other dimension with unused blank space) —
         // that produced a large blank strip at the bottom, which is the
         // opposite of what was asked for. So instead we keep an explicit
-        // fixed scale close to the original 117%, verified by rendering
-        // both minimal and heavily-overflowing sample content through this
-        // exact pipeline (ExcelJS's own resaved font metrics are slightly
-        // narrower than the original file's) to confirm it still lands on
-        // a single A4 page with a safety margin below the point where it
-        // would spill a sliver onto a second page. The 'excel' target keeps
-        // this untouched 117% — it never went through the column/row
-        // widening above, so 117% is still exactly right. The 'sheets'
-        // target divides it down by the same column factor, purely so the
-        // file would still look reasonable if someone opened it directly
-        // in Excel instead of via the Sheets conversion Drive performs.
+        // fixed scale, verified by rendering both minimal and heavily-
+        // overflowing sample content through this exact pipeline (ExcelJS's
+        // own resaved font metrics are slightly narrower than the original
+        // file's) to confirm it lands on a single A4 page.
+        //
+        // 117% itself turned out to only have a paper-thin safety margin:
+        // it was tuned against LibreOffice's PDF export, which assumes an
+        // idealized printable area, but a real printer driver (confirmed on
+        // a RICOH IM C2500) carves out a slightly different hardware
+        // margin, and at 117% that was just enough to push a hairline
+        // sliver of the sheet onto a second page. EXCEL_SCALE is knocked
+        // down to 114% to buy back a real margin against that kind of
+        // driver-to-driver variation, at the cost of a barely-visible
+        // amount of edge-to-edge fill. The 'excel' target uses this
+        // directly (it never went through the column/row widening above).
+        // The 'sheets' target divides it down by the same column factor,
+        // purely so the file would still look reasonable if someone opened
+        // it directly in Excel instead of via the Sheets conversion Drive
+        // performs.
+        var EXCEL_SCALE = 114;
         ws.pageSetup.fitToPage = false;
-        ws.pageSetup.scale = forSheets ? Math.round(117 / SHEETS_WIDTH_FACTOR) : 117;
+        ws.pageSetup.scale = forSheets ? Math.round(EXCEL_SCALE / SHEETS_WIDTH_FACTOR) : EXCEL_SCALE;
 
         // The template defines no explicit print area, and (see
         // fixMergedBoxBorders below) its <cols> block carries a trailing
