@@ -988,7 +988,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   // work at all; the rest of the form (filling in data, downloading the
   // Excel file, opening a mail client) keeps working from a local file
   // regardless.
-  var GOOGLE_CLIENT_ID = '164638106875-dj2gqt2b7k901d6rda66p2e6ekr5752q.apps.googleusercontent.com';
+  var GOOGLE_CLIENT_ID = '';
   var DRIVE_FOLDER_NAME = '修理依頼書';
   var DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 
@@ -1209,22 +1209,31 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         // Excel, there's no shared-scale constraint to reconcile here the
         // way there would be if this were also the 'excel' output.
         if(forSheets){
-          var SHEETS_WIDTH_FACTOR = 1.43;
-          // The one-page ceiling for 43 rows' stored height (at this
-          // column config) was empirically bounded earlier to somewhere
-          // between 873.015pt (37 rows at 1.43x: filled the page, no
-          // overflow) and 896.61pt (38 rows at 1.43x: spilled to a 2nd
-          // page). A cautious first pass moved the factor only from
-          // 1.22 to 1.227 (stored total ~871pt) to close a small measured
-          // gap, but the user reports there's still clearly visible blank
-          // space below the table — meaning the true safe ceiling sits
-          // well above 871pt, closer to the 896.61pt confirmed-overflow
-          // point than to the 873pt confirmed-safe point. Pushing to 1.25
-          // (stored total 886.875pt) uses most of that headroom while
-          // still keeping a ~9.7pt (~1.1%) buffer below the confirmed
-          // overflow point, so it should shrink the visible gap a lot
-          // further without reopening the earlier 2-page overflow bug.
-          var SHEETS_HEIGHT_FACTOR = 1.25;
+          // Template's own unscaled column widths: A=1.125, B:I sum=71.625.
+          // The user measured the remaining right-side gap directly against
+          // column A's own on-screen width in Sheets: "about 2 more A-column
+          // widths" still unfilled. Column A isn't in the print area, but it
+          // goes through the same stored-width-unit -> Sheets-font-metric
+          // pixel conversion as B:I, so it's a valid ruler: target B:I total
+          // = current (71.625*1.43) + 2*1.125 = 104.67 -> factor 1.461.
+          var SHEETS_WIDTH_FACTOR = 1.461;
+          // The user separately measured the bottom gap directly against
+          // the sheet's own row height: "about 3 more rows" of blank space
+          // below the last (43rd) row, out of 43 rows currently. Scaling
+          // the height factor up by that same relative amount (46/43) grows
+          // the total by the same proportion the user is asking for:
+          // 1.25 * 46/43 = 1.337. This is a noticeably bigger jump than the
+          // last couple of steps (previous attempts at 1.22 and 1.227 and
+          // 1.25 each undershot per the user's own follow-up measurements),
+          // and it's no longer clearly inside the ~873-896pt one-page
+          // ceiling measured earlier in stored-pt terms for the old 1.43
+          // width factor (that ceiling itself shifts with SHEETS_WIDTH_FACTOR,
+          // since Sheets' "fit to width" zoom — applied to rows too — is set
+          // by the column widths). So this specific combination hasn't been
+          // verified against the true one-page limit yet; the print dialog's
+          // own "合計:○ページ" counter is the simplest way to confirm it
+          // didn't spill to a 2nd page.
+          var SHEETS_HEIGHT_FACTOR = 1.337;
           var DEFAULT_ROW_HEIGHT = ws.properties.defaultRowHeight || 16.5;
           ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'].forEach(function(col){
             var current = ws.getColumn(col).width;
