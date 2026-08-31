@@ -988,7 +988,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   // work at all; the rest of the form (filling in data, downloading the
   // Excel file, opening a mail client) keeps working from a local file
   // regardless.
-  var GOOGLE_CLIENT_ID = '164638106875-dj2gqt2b7k901d6rda66p2e6ekr5752q.apps.googleusercontent.com';
+  var GOOGLE_CLIENT_ID = '';
   var DRIVE_FOLDER_NAME = '修理依頼書';
   var DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 
@@ -1278,37 +1278,48 @@ https://github.com/nodeca/pako/blob/main/LICENSE
           if (repairTimes[ti]) ws.getCell(TECH_COLS[ti] + '40').value = repairTimes[ti];
         }
 
-        // The original template prints at scale=117%, which the template's
-        // own author evidently chose to make the form fill the A4 sheet
-        // (its ~43 rows at their normal height only cover about 85% of an
-        // A4 page at 100% scale). Using Excel's automatic "fit to 1 page"
-        // instead avoids overflow but visibly over-shrinks the sheet
-        // (it settles on whichever of width/height needs the larger
-        // reduction, leaving the other dimension with unused blank space) —
-        // that produced a large blank strip at the bottom, which is the
-        // opposite of what was asked for. So instead we keep an explicit
-        // fixed scale, verified by rendering both minimal and heavily-
-        // overflowing sample content through this exact pipeline (ExcelJS's
-        // own resaved font metrics are slightly narrower than the original
-        // file's) to confirm it lands on a single A4 page.
+        // The template's own natural column/row proportions are already a
+        // close match for an A4 page (its ~43 rows at their normal height
+        // cover about 85% of an A4 page at 100% scale, needing a fairly
+        // uniform stretch — not a lopsided one — to fill it). Earlier
+        // versions of this pipeline pinned an explicit fixed scale (117%,
+        // later 114%) tuned by rendering through LibreOffice until the
+        // output looked like a single, fully-filled A4 page. That worked
+        // in LibreOffice, but a real printer driver (confirmed on a RICOH
+        // IM C2500) carves out a slightly different hardware margin than
+        // LibreOffice's idealized PDF export assumes — enough, at either
+        // 117% or 114%, to push a hairline sliver of the sheet onto a
+        // second, otherwise-blank page. No fixed percentage chosen against
+        // one rendering engine can be guaranteed safe against every real
+        // printer driver's own margins.
         //
-        // 117% itself turned out to only have a paper-thin safety margin:
-        // it was tuned against LibreOffice's PDF export, which assumes an
-        // idealized printable area, but a real printer driver (confirmed on
-        // a RICOH IM C2500) carves out a slightly different hardware
-        // margin, and at 117% that was just enough to push a hairline
-        // sliver of the sheet onto a second page. EXCEL_SCALE is knocked
-        // down to 114% to buy back a real margin against that kind of
-        // driver-to-driver variation, at the cost of a barely-visible
-        // amount of edge-to-edge fill. The 'excel' target uses this
-        // directly (it never went through the column/row widening above).
-        // The 'sheets' target divides it down by the same column factor,
-        // purely so the file would still look reasonable if someone opened
-        // it directly in Excel instead of via the Sheets conversion Drive
+        // Excel's own "fit to 1 page wide x 1 page tall" auto-scaling
+        // (fitToPage) sidesteps that entirely: instead of us guessing a
+        // percentage, Excel computes whatever scale keeps the sheet on
+        // exactly one page for the printer actually selected at print
+        // time, so it can never spill a sliver onto a second page on any
+        // printer. This was avoided earlier in this project on unrelated,
+        // less-well-proportioned content, where it visibly over-shrank one
+        // axis — but with the current column/row proportions already
+        // close to A4's own aspect ratio, testing it here lands within a
+        // hair of the old fixed-scale fill, so that tradeoff no longer
+        // applies. The 'excel' target uses fitToPage for exactly this
+        // robustness. The 'sheets' target keeps an explicit scale — Google
+        // Sheets' own print pipeline ignores this file's pageSetup
+        // entirely, so fitToPage's real benefit (matching a specific
+        // printer's own margins) wouldn't apply there anyway; the value is
+        // only kept so the file still looks reasonable if someone opens it
+        // directly in Excel instead of via the Sheets conversion Drive
         // performs.
         var EXCEL_SCALE = 114;
-        ws.pageSetup.fitToPage = false;
-        ws.pageSetup.scale = forSheets ? Math.round(EXCEL_SCALE / SHEETS_WIDTH_FACTOR) : EXCEL_SCALE;
+        if(forSheets){
+          ws.pageSetup.fitToPage = false;
+          ws.pageSetup.scale = Math.round(EXCEL_SCALE / SHEETS_WIDTH_FACTOR);
+        } else {
+          ws.pageSetup.fitToPage = true;
+          ws.pageSetup.fitToWidth = 1;
+          ws.pageSetup.fitToHeight = 1;
+        }
 
         // The template defines no explicit print area, and (see
         // fixMergedBoxBorders below) its <cols> block carries a trailing
