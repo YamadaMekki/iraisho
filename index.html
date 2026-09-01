@@ -1147,9 +1147,23 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   // work at all; the rest of the form (filling in data, downloading the
   // Excel file, opening a mail client) keeps working from a local file
   // regardless.
-  var GOOGLE_CLIENT_ID = '164638106875-dj2gqt2b7k901d6rda66p2e6ekr5752q.apps.googleusercontent.com';
+  var GOOGLE_CLIENT_ID = '';
   var DRIVE_FOLDER_NAME = '修理依頼書';
   var DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+  // Google's OAuth access tokens are always short-lived (about 1 hour) and,
+  // from a page with no backend server, can only ever be renewed by asking
+  // Google again — there's no way to mint a permanent token from pure
+  // client-side JS. What we CAN do is make that renewal invisible: as
+  // long as the browser still has an active Google session and the user
+  // already granted this app access once before, requestAccessToken with
+  // prompt:'' fetches a fresh token silently in the background (no popup,
+  // no click). Combined with caching the last token in localStorage so a
+  // page reload doesn't even need that silent round trip if the cached one
+  // is still valid, this means the "Googleでサインイン" button/consent
+  // screen should in practice only ever be seen once per browser, not once
+  // per session — that's the closest a static file can get to "常時サイン
+  // イン" without a server to hold a real refresh token.
+  var TOKEN_STORAGE_KEY = 'yamadaMekkiSheetsToken';
 
   var googleSignInBtn = document.getElementById('googleSignInBtn');
   var googleAccountLabel = document.getElementById('googleAccountLabel');
@@ -1158,10 +1172,91 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   var sheetsSetupNote = document.getElementById('sheetsSetupNote');
   var googleTokenClient = null;
   var googleAccessToken = null;
+  var tokenExpiresAt = 0; // epoch ms; 0 = no token
+  var tokenWaiters = [];  // pending {resolve, reject} from ensureSignedIn() calls
+  var authInFlight = false;
 
   function setSheetsStatus(text, isError){
     sheetsStatusMsg.textContent = text;
     sheetsStatusMsg.className = 'status' + (isError ? ' err' : (text ? ' ok' : ''));
+  }
+
+  function loadCachedToken(){
+    try{
+      var raw = localStorage.getItem(TOKEN_STORAGE_KEY);
+      if(!raw) return;
+      var data = JSON.parse(raw);
+      if(data && data.access_token && data.expires_at > Date.now()){
+        googleAccessToken = data.access_token;
+        tokenExpiresAt = data.expires_at;
+        googleAccountLabel.textContent = 'サインイン済み';
+        sheetsSaveBtn.disabled = false;
+      }
+    }catch(e){ /* localStorage unavailable or corrupt cache — just skip it */ }
+  }
+
+  function saveTokenToCache(){
+    try{
+      localStorage.setItem(TOKEN_STORAGE_KEY, JSON.stringify({
+        access_token: googleAccessToken,
+        expires_at: tokenExpiresAt
+      }));
+    }catch(e){ /* private browsing / storage full — token still works this session */ }
+  }
+
+  function clearTokenCache(){
+    try{ localStorage.removeItem(TOKEN_STORAGE_KEY); }catch(e){}
+  }
+
+  function handleTokenResponse(resp){
+    authInFlight = false;
+    var waiters = tokenWaiters;
+    tokenWaiters = [];
+    if(resp.error){
+      googleAccessToken = null;
+      tokenExpiresAt = 0;
+      clearTokenCache();
+      waiters.forEach(function(w){ w.reject(new Error(resp.error)); });
+      return;
+    }
+    googleAccessToken = resp.access_token;
+    // Knock 2 minutes off the real expiry as a safety buffer, so a save
+    // that starts just before expiry doesn't fail mid-upload.
+    tokenExpiresAt = Date.now() + (Number(resp.expires_in || 3600) - 120) * 1000;
+    saveTokenToCache();
+    googleAccountLabel.textContent = 'サインイン済み';
+    sheetsSaveBtn.disabled = false;
+    waiters.forEach(function(w){ w.resolve(googleAccessToken); });
+  }
+
+  // Requests a token with the given prompt mode ('' = silent, no UI unless
+  // Google decides interaction is truly required; 'consent' = show the
+  // account/consent screen). Concurrent calls share one in-flight request.
+  function requestToken(promptMode){
+    return new Promise(function(resolve, reject){
+      tokenWaiters.push({ resolve: resolve, reject: reject });
+      if(authInFlight) return;
+      authInFlight = true;
+      googleTokenClient.requestAccessToken({ prompt: promptMode });
+    });
+  }
+
+  // Resolves to a usable access token, refreshing/signing in as needed.
+  // explicit=true (a real button click) is allowed to fall back to the
+  // interactive consent screen and to surface errors; explicit=false
+  // (the automatic attempt on page load) only ever tries silently and
+  // fails quietly, so it never pops up anything the user didn't ask for.
+  function ensureSignedIn(explicit){
+    if(googleAccessToken && Date.now() < tokenExpiresAt){
+      return Promise.resolve(googleAccessToken);
+    }
+    if(!googleTokenClient){
+      return Promise.reject(new Error('not_configured'));
+    }
+    return requestToken('').catch(function(err){
+      if(!explicit) throw err;
+      return requestToken('consent');
+    });
   }
 
   function initGoogleAuth(){
@@ -1172,18 +1267,16 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     googleTokenClient = google.accounts.oauth2.initTokenClient({
       client_id: GOOGLE_CLIENT_ID,
       scope: DRIVE_SCOPE,
-      callback: function(resp){
-        if(resp.error){
-          setSheetsStatus('サインインに失敗しました：' + resp.error, true);
-          return;
-        }
-        googleAccessToken = resp.access_token;
-        googleAccountLabel.textContent = 'サインイン済み';
-        sheetsSaveBtn.disabled = false;
-        setSheetsStatus('サインインしました');
-      }
+      callback: handleTokenResponse
     });
     googleSignInBtn.disabled = false;
+    loadCachedToken();
+    // Try to silently restore the session on every page load — if the
+    // browser still has an active Google session and prior consent, this
+    // succeeds with no popup at all and the user never sees the sign-in
+    // screen again. If it fails, we simply stay in the signed-out state;
+    // no error is shown since the user never asked for anything yet.
+    ensureSignedIn(false).catch(function(){ /* stay signed out until they click */ });
   }
 
   (function waitForGIS(attempts){
@@ -1201,7 +1294,12 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       setSheetsStatus('Google連携がまだ設定されていません。このファイルを配布した担当者にお問い合わせください。', true);
       return;
     }
-    googleTokenClient.requestAccessToken({ prompt: googleAccessToken ? '' : 'consent' });
+    setSheetsStatus('');
+    ensureSignedIn(true).then(function(){
+      setSheetsStatus('サインインしました');
+    }).catch(function(err){
+      setSheetsStatus('サインインに失敗しました：' + err.message, true);
+    });
   });
 
   function driveApiFetch(token, url, opts){
@@ -1249,7 +1347,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   }
 
   sheetsSaveBtn.addEventListener('click', function(){
-    if(!googleAccessToken){
+    if(!googleTokenClient){
       setSheetsStatus('先にGoogleでサインインしてください', true);
       return;
     }
@@ -1262,10 +1360,17 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     var dateTag = fields.reqDateVal.replace(/-/g, '');
     var filename = sanitizeFilename('修理依頼書_' + fields.equipment + '_' + dateTag);
 
-    buildWorkbook('sheets').then(function(buffer){
-      var blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-      return findOrCreateDriveFolder(googleAccessToken, DRIVE_FOLDER_NAME).then(function(folderId){
-        return uploadAsGoogleSheet(googleAccessToken, filename, folderId, blob);
+    // ensureSignedIn(true) reuses a still-valid cached/in-memory token as-is,
+    // silently refreshes an expired one if the browser session allows it,
+    // and only falls back to the interactive consent screen if neither
+    // works — so this button doubles as "sign in and save" the first time,
+    // and "just save" every time after.
+    ensureSignedIn(true).then(function(token){
+      return buildWorkbook('sheets').then(function(buffer){
+        var blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        return findOrCreateDriveFolder(token, DRIVE_FOLDER_NAME).then(function(folderId){
+          return uploadAsGoogleSheet(token, filename, folderId, blob);
+        });
       });
     }).then(function(result){
       var link = 'https://docs.google.com/spreadsheets/d/' + result.id + '/edit';
